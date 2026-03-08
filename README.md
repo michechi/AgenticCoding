@@ -18,6 +18,26 @@ Tech-savvy professionals who want to understand and use AI coding agents without
 | **API Models** | When and how to use Claude, GPT-4.1, DeepSeek, and Gemini |
 | **Security** | Sandboxing, path restrictions, command allowlisting |
 
+## Hardware Requirements
+
+Running LLMs locally requires more resources than a typical development setup. Here's what you need depending on which model you want to run:
+
+| Model size | RAM | GPU VRAM | Example hardware | Speed |
+|-----------|-----|----------|-----------------|-------|
+| **7B** (Q4 quantized) | 8 GB | 6 GB | Any modern laptop | ~30 tokens/sec |
+| **13B** (Q4) | 16 GB | 10 GB | Gaming laptop / desktop | ~20 tokens/sec |
+| **32B** (Q4) | 32 GB | 24 GB | RTX 4090 / Mac M2 Pro (32GB) | ~15 tokens/sec |
+| **70B** (Q4) | 64 GB | 48 GB | 2x RTX 4090 / Mac M2 Ultra | ~8 tokens/sec |
+
+**Key notes:**
+
+- **No GPU? No problem.** Both Ollama and LM Studio can run models on CPU only — it's just slower (roughly 3-5x). A 7B model on a modern laptop CPU is still usable.
+- **Apple Silicon is great for this.** M1/M2/M3/M4 Macs use unified memory (RAM = VRAM), so a MacBook Pro with 32GB can comfortably run 32B models. This is one of the best price/performance setups for local LLMs.
+- **Quantization matters.** A "Q4" (4-bit quantized) model uses ~4x less memory than the full-precision version with minimal quality loss. All models on Ollama are quantized by default.
+- **Start small.** A 7B model on 8GB RAM is enough to follow this entire guide and build a working agent. Scale up once you've validated the workflow.
+
+> **Don't have the hardware?** You can skip local inference entirely and use API-based models (see the guide's [API section](#configuration)). You can also use free-tier GPU providers like [Google Colab](https://colab.google) or [Lightning AI](https://lightning.ai) to run larger models remotely.
+
 ## Quick Start
 
 ### Prerequisites
