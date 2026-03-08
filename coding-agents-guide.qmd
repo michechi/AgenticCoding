@@ -1,0 +1,1190 @@
+---
+title: "Build Your Own Coding Agent"
+subtitle: "A Practical Guide to Open-Source AI Coding Assistants"
+author: "Michele Chini"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+    code-fold: false
+    code-tools: true
+    highlight-style: github
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+execute:
+  enabled: false
+---
+
+# Introduction
+
+## What is a Coding Agent?
+
+A **coding agent** is an AI system that can autonomously write, edit, debug, and reason about code. Unlike a simple chatbot that answers programming questions, a coding agent can:
+
+- Read and navigate your codebase
+- Execute shell commands and interpret results
+- Edit files across your project
+- Run tests and fix failures iteratively
+- Plan multi-step tasks and self-correct
+
+You've probably heard of tools like **Claude Code** (Anthropic), **GitHub Copilot** (Microsoft), or **Codex CLI** (OpenAI). These are commercial, closed-source agents. But there's a growing ecosystem of **open-source alternatives** that you can run locally, customize, and integrate into your own workflows — without sending proprietary code to third-party servers.
+
+## Why Should You Care?
+
+If you work in a regulated industry (banking, healthcare, government), sending source code to external APIs may violate compliance policies. Open-source coding agents let you:
+
+- **Keep code on-premise**: Run models locally or on your own infrastructure
+- **Customize behaviour**: Add domain-specific tools, enforce coding standards, integrate with internal systems
+- **Control costs**: No per-token API fees for local models
+- **Audit everything**: Full transparency into what the model sees and does
+
+## What You'll Learn
+
+By the end of this guide, you will be able to:
+
+1. Understand the architecture of a coding agent
+2. Choose the right open-source model using benchmarks
+3. Set up a local coding agent with working code
+4. Extend it with custom tools
+5. (Bonus) Use API-based models when local isn't enough
+
+---
+
+# The Landscape: Open-Source Coding Agents
+
+Before building our own, let's map what already exists.
+
+| Tool | Description | Model Support | License |
+|------|-------------|---------------|---------|
+| [Aider](https://aider.chat) | Terminal-based pair programmer | Any LLM (local or API) | Apache 2.0 |
+| [Open Interpreter](https://openinterpreter.com) | Natural language interface to your computer | Any LLM | AGPL 3.0 |
+| [SWE-agent](https://swe-agent.com) | Autonomous bug-fixing agent | Any LLM | MIT |
+| [Continue](https://continue.dev) | IDE extension (VS Code / JetBrains) | Any LLM | Apache 2.0 |
+| [Tabby](https://tabby.tabbyml.com) | Self-hosted code completion | Open models | Apache 2.0 |
+| [Goose](https://github.com/block/goose) | Autonomous coding agent by Block | Any LLM | Apache 2.0 |
+| [OpenCode](https://opencode.ai) | Terminal coding agent (like Claude Code, but open-source) | Any LLM | MIT |
+
+::: {.callout-tip}
+## Quick Start Recommendation
+If you want to try an open-source coding agent **right now** without building anything, install [Aider](https://aider.chat). It works with local models via Ollama and takes 5 minutes to set up.
+:::
+
+---
+
+# Architecture of a Coding Agent
+
+Every coding agent, whether commercial or open-source, shares the same core architecture:
+
+```{mermaid}
+flowchart LR
+    A[User Prompt] --> B[LLM Brain]
+    B --> C{Tool Selection}
+    C --> D[Read Files]
+    C --> E[Edit Files]
+    C --> F[Run Commands]
+    C --> G[Search Code]
+    D --> B
+    E --> B
+    F --> B
+    G --> B
+    B --> H[Response to User]
+```
+
+## The Four Components
+
+### 1. The LLM (the "Brain")
+
+The large language model that reasons about code. It receives context (your files, your request) and decides what to do next.
+
+### 2. Tools (the "Hands")
+
+Functions the LLM can call to interact with the outside world:
+
+- **File operations**: read, write, edit files
+- **Shell execution**: run commands (tests, builds, git)
+- **Search**: find files, grep for patterns
+- **Web access**: fetch documentation, search for solutions
+
+### 3. The Agent Loop
+
+The orchestration logic that:
+
+1. Sends the user's request + context to the LLM
+2. Parses the LLM's response for tool calls
+3. Executes the tools
+4. Feeds results back to the LLM
+5. Repeats until the task is complete
+
+### 4. Context Management
+
+Code projects can be huge. The agent needs strategies to:
+
+- Select only relevant files to include in the prompt
+- Summarize large files
+- Maintain conversation history without exceeding token limits
+
+---
+
+# Choosing the Right Model
+
+## Where to Find Models
+
+The go-to resource is [Hugging Face](https://huggingface.co), the largest open-source ML platform. Here's how to navigate it:
+
+### Hugging Face Model Hub
+
+Go to [huggingface.co/models](https://huggingface.co/models) and filter by:
+
+- **Task**: `Text Generation`
+- **Library**: `transformers`, `gguf` (for local inference)
+- **Sort by**: `Trending` or `Most Downloads`
+
+### What to Look For in a Model Card
+
+Every model on Hugging Face has a **model card** — a README with key information. Here's what matters for coding agents:
+
+| Field | What to check |
+|-------|--------------|
+| **Parameters** | 7B runs on a laptop, 13B-34B needs a good GPU, 70B+ needs multi-GPU |
+| **Context window** | Minimum 8K tokens, ideally 32K+ for code |
+| **License** | `Apache 2.0` or `MIT` for commercial use. Watch out for `Llama Community License` restrictions |
+| **Training data** | Was it trained on code? Look for mentions of GitHub, The Stack, CodeSearchNet |
+| **Quantization** | GGUF/GPTQ versions available? These run faster with less RAM |
+
+### Example: Evaluating a Model
+
+Let's say you're considering `Qwen/Qwen2.5-Coder-32B-Instruct`. On its Hugging Face page you'd check:
+
+```{python}
+#| label: check-model-info
+# You can inspect model metadata programmatically using the huggingface_hub library
+
+# pip install huggingface_hub
+
+from huggingface_hub import model_info
+
+model = model_info("Qwen/Qwen2.5-Coder-32B-Instruct")
+
+print(f"Model:       {model.modelId}")
+print(f"Downloads:   {model.downloads:,}")
+print(f"Likes:       {model.likes:,}")
+print(f"License:     {model.card_data.license if model.card_data else 'N/A'}")
+print(f"Tags:        {model.tags}")
+print(f"Pipeline:    {model.pipeline_tag}")
+print(f"Library:     {model.library_name}")
+```
+
+## Key Benchmarks for Coding Models
+
+Not all benchmarks are equal. Here are the ones that actually matter for coding agents:
+
+### SWE-bench
+
+The gold standard for evaluating coding agents. It tests whether an agent can autonomously resolve real GitHub issues from popular Python repositories.
+
+- **What it measures**: End-to-end bug fixing (read issue → find code → write patch → pass tests)
+- **Where to check**: [swebench.com](https://www.swebench.com)
+- **What's a good score**: Top agents score 40-50% on SWE-bench Verified
+
+### BigCodeBench
+
+Evaluates code generation across 1,140 practical programming tasks.
+
+- **What it measures**: Function-level code generation with real-world library usage
+- **Where to check**: [bigcode-bench.github.io](https://bigcode-bench.github.io)
+
+### HumanEval / HumanEval+
+
+The classic benchmark: 164 hand-written Python programming problems.
+
+- **What it measures**: Basic code generation ability
+- **Limitation**: Too easy for modern models — most score 80%+
+- **Where to check**: [evalplus.github.io](https://evalplus.github.io/leaderboard.html)
+
+### LiveCodeBench
+
+Fresh competitive programming problems (post-training-cutoff) to avoid data contamination.
+
+- **What it measures**: Genuine reasoning and problem-solving
+- **Where to check**: [livecodebench.github.io](https://livecodebench.github.io)
+
+### How to Compare Models on Hugging Face
+
+```{python}
+#| label: search-coding-models
+# Search for coding models and compare them
+
+from huggingface_hub import list_models
+
+# Search for coding-focused models, sorted by downloads
+coding_models = list_models(
+    search="coder",
+    sort="downloads",
+    direction=-1,
+    limit=10,
+)
+
+print(f"{'Model':<50} {'Downloads':>12} {'Likes':>8}")
+print("-" * 72)
+for m in coding_models:
+    print(f"{m.modelId:<50} {m.downloads:>12,} {m.likes:>8,}")
+```
+
+::: {.callout-note}
+## Recommended Open-Weight Models for Coding (as of early 2026)
+
+| Model | Params | Context | Strengths |
+|-------|--------|---------|-----------|
+| Qwen2.5-Coder-32B-Instruct | 32B | 128K | Best overall open coding model |
+| DeepSeek-Coder-V2 | 236B (MoE) | 128K | Massive capability, needs big hardware |
+| CodeLlama-70B-Instruct | 70B | 16K | Meta's best coding model |
+| StarCoder2-15B | 15B | 16K | Permissive license, good for fine-tuning |
+| DeepSeek-R1-0528 | 671B (MoE) | 128K | State-of-the-art reasoning |
+:::
+
+---
+
+# Setting Up Your Environment
+
+## Prerequisites
+
+You need:
+
+- **Python 3.10+**
+- **A local LLM runtime** (we'll use Ollama — it's the simplest)
+- **Basic terminal skills** (you know what `cd`, `pip install`, and `git` do)
+
+Hardware requirements depend on model size:
+
+| Model size | RAM needed | GPU VRAM | Example hardware |
+|-----------|-----------|----------|-----------------|
+| 7B (Q4) | 8 GB | 6 GB | Laptop with decent GPU |
+| 13B (Q4) | 16 GB | 10 GB | Gaming desktop |
+| 32B (Q4) | 32 GB | 24 GB | RTX 4090 / Mac M2 Pro |
+| 70B (Q4) | 64 GB | 48 GB | 2x RTX 4090 / Mac M2 Ultra |
+
+## Option A: Ollama (Command-Line)
+
+[Ollama](https://ollama.com) lets you run open-weight models locally with a single command. It's lightweight, fast, and ideal if you're comfortable with the terminal.
+
+### Install Ollama
+
+```{bash}
+#| label: install-ollama
+# macOS / Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Or on macOS via Homebrew:
+# brew install ollama
+```
+
+Verify it's working:
+
+```{bash}
+#| label: verify-ollama
+ollama --version
+```
+
+### Pull a Coding Model
+
+```{bash}
+#| label: pull-model
+# Pull Qwen2.5-Coder (7B is a good starting point)
+ollama pull qwen2.5-coder:7b
+
+# For a more capable model (needs 24GB+ RAM):
+# ollama pull qwen2.5-coder:32b
+```
+
+Test it with a quick prompt:
+
+```{bash}
+#| label: test-model
+ollama run qwen2.5-coder:7b "Write a Python function to check if a number is prime"
+```
+
+### Ollama's API
+
+Ollama exposes an **OpenAI-compatible API** on `http://localhost:11434`. This means any code written for the OpenAI API works with Ollama — just change the base URL. We'll use this extensively in the hands-on sections.
+
+## Option B: LM Studio (GUI) {#sec-lmstudio}
+
+[LM Studio](https://lmstudio.ai) is a **desktop application** for running local models. If you prefer a graphical interface over the terminal, this is for you.
+
+### Why LM Studio?
+
+- **Visual model browser**: Search, filter, and download models from Hugging Face directly in the app — no command line needed
+- **One-click download**: Pick a model, click download, and it handles quantization format selection (GGUF) automatically
+- **Built-in chat UI**: Test models in a ChatGPT-like interface before using them programmatically
+- **Performance dashboard**: See tokens/second, memory usage, and GPU utilization in real time
+- **OpenAI-compatible server**: Like Ollama, LM Studio can serve models via a local API
+
+### Install LM Studio
+
+1. Download from [lmstudio.ai](https://lmstudio.ai) (available for macOS, Windows, Linux)
+2. Install and open the application
+3. You'll see the **Discover** tab — this is the model browser
+
+### Downloading a Model
+
+In the **Discover** tab:
+
+1. Search for `qwen2.5-coder` (or any model you want)
+2. You'll see various quantization options (Q4_K_M, Q5_K_M, Q8_0, etc.)
+   - **Q4_K_M**: Good balance of quality and size (recommended for most users)
+   - **Q8_0**: Higher quality, needs more RAM
+   - **FP16**: Full precision, needs significantly more RAM/VRAM
+3. Click the download button next to your chosen variant
+4. Wait for the download to complete
+
+::: {.callout-tip}
+## Choosing Quantization in LM Studio
+LM Studio shows you the file size and estimated RAM usage for each quantization variant. A good rule of thumb: pick the largest quantization that fits in your available RAM with ~2GB headroom.
+:::
+
+### Using the Chat Interface
+
+Once a model is downloaded:
+
+1. Go to the **Chat** tab (left sidebar)
+2. Select your model from the dropdown at the top
+3. Start chatting — use this to quickly test if a model is good at coding before integrating it into your workflow
+
+### Running LM Studio as a Local Server
+
+This is the key feature for integration with coding agents:
+
+1. Go to the **Developer** tab (left sidebar, `<>` icon)
+2. Select a model to serve
+3. Click **Start Server**
+4. The server runs at `http://localhost:1234` by default
+
+Now you can point any OpenAI-compatible tool at it:
+
+```{python}
+#| label: lmstudio-client
+from openai import OpenAI
+
+# LM Studio uses port 1234 by default (Ollama uses 11434)
+client = OpenAI(
+    base_url="http://localhost:1234/v1",
+    api_key="lm-studio",  # LM Studio doesn't require a real key
+)
+
+response = client.chat.completions.create(
+    model="qwen2.5-coder-7b",  # The model name shown in LM Studio
+    messages=[
+        {"role": "user", "content": "Write a Python function to reverse a linked list"}
+    ],
+    temperature=0.1,
+)
+
+print(response.choices[0].message.content)
+```
+
+### LM Studio vs Ollama
+
+| Feature | Ollama | LM Studio |
+|---------|--------|-----------|
+| Interface | CLI only | GUI + CLI |
+| Model discovery | `ollama list` / website | Built-in browser with filters |
+| Ease of use | Easy (for terminal users) | Easiest (point and click) |
+| API port | `localhost:11434` | `localhost:1234` |
+| Resource monitoring | Limited | Built-in dashboard |
+| Scriptability | Excellent | Good (via API) |
+| Multi-model serving | One at a time | One at a time |
+| Platform | macOS, Linux, Windows | macOS, Linux, Windows |
+
+::: {.callout-note}
+## They're Interchangeable
+Both Ollama and LM Studio expose OpenAI-compatible APIs. All the code in this guide works with either — just swap the `base_url`:
+
+- Ollama: `http://localhost:11434/v1`
+- LM Studio: `http://localhost:1234/v1`
+:::
+
+## Install Python Dependencies
+
+```{bash}
+#| label: install-deps
+pip install openai huggingface_hub rich
+```
+
+---
+
+# Building a Minimal Coding Agent
+
+Let's build a coding agent from scratch. We'll start simple and add features incrementally.
+
+## Version 1: A Chat Loop with Tool Calling
+
+This is the simplest possible agent: it can read files, list directories, and run shell commands.
+
+```{python}
+#| label: minimal-agent
+#| code-fold: false
+"""
+minimal_agent.py — A bare-bones coding agent using a local LLM via Ollama.
+"""
+
+import json
+import subprocess
+import os
+from openai import OpenAI
+
+# ── Configuration ──────────────────────────────────────────────────────
+MODEL = "qwen2.5-coder:7b"  # Change to your preferred model
+client = OpenAI(
+    base_url="http://localhost:11434/v1",  # Ollama's OpenAI-compatible endpoint
+    api_key="ollama",                       # Ollama doesn't need a real key
+)
+
+# ── Tool Definitions ──────────────────────────────────────────────────
+# These follow the OpenAI function-calling schema.
+# The LLM reads these descriptions to decide when and how to call each tool.
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read the contents of a file at the given path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or relative file path"
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "List files and folders in a directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path (default: current directory)"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "Execute a shell command and return its output. Use for running tests, git commands, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    }
+                },
+                "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path to write to"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write"
+                    }
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
+]
+
+
+# ── Tool Implementations ─────────────────────────────────────────────
+
+def read_file(path: str) -> str:
+    """Read a file and return its contents (with basic safety check)."""
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        return f"Error: File not found: {path}"
+    try:
+        with open(path, "r") as f:
+            content = f.read()
+        # Truncate very large files to avoid blowing up the context
+        if len(content) > 10_000:
+            return content[:10_000] + f"\n\n... [truncated, file is {len(content)} chars]"
+        return content
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+def list_directory(path: str = ".") -> str:
+    """List directory contents."""
+    path = path or "."
+    try:
+        entries = os.listdir(path)
+        entries.sort()
+        result = []
+        for entry in entries:
+            full = os.path.join(path, entry)
+            marker = "/" if os.path.isdir(full) else ""
+            result.append(f"  {entry}{marker}")
+        return f"Contents of {os.path.abspath(path)}:\n" + "\n".join(result)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_command(command: str) -> str:
+    """Execute a shell command with a timeout."""
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,  # Safety: don't let commands run forever
+        )
+        output = result.stdout + result.stderr
+        if len(output) > 5_000:
+            output = output[:5_000] + "\n... [truncated]"
+        return output or "(no output)"
+    except subprocess.TimeoutExpired:
+        return "Error: Command timed out after 30 seconds"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def write_file(path: str, content: str) -> str:
+    """Write content to a file."""
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return f"Successfully wrote {len(content)} chars to {path}"
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+
+# Map tool names to their implementations
+TOOL_MAP = {
+    "read_file": read_file,
+    "list_directory": list_directory,
+    "run_command": run_command,
+    "write_file": write_file,
+}
+
+
+# ── Agent Loop ────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """You are a helpful coding assistant with access to the local filesystem.
+You can read files, list directories, write files, and run shell commands.
+Always read relevant files before suggesting changes. Think step by step.
+When editing code, show the complete modified file."""
+
+
+def run_agent():
+    """Main agent loop: chat with the user, call tools as needed."""
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    print("Coding Agent (type 'quit' to exit)")
+    print("=" * 40)
+
+    while True:
+        # Get user input
+        user_input = input("\nYou: ").strip()
+        if user_input.lower() in ("quit", "exit", "q"):
+            print("Goodbye!")
+            break
+        if not user_input:
+            continue
+
+        messages.append({"role": "user", "content": user_input})
+
+        # Agent loop: keep going until the LLM responds without tool calls
+        while True:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=TOOLS,
+                temperature=0.1,
+            )
+
+            choice = response.choices[0]
+            message = choice.message
+
+            # If the model wants to call tools, execute them
+            if message.tool_calls:
+                # Add the assistant's message (with tool calls) to history
+                messages.append(message)
+
+                for tool_call in message.tool_calls:
+                    fn_name = tool_call.function.name
+                    fn_args = json.loads(tool_call.function.arguments)
+
+                    print(f"  [Tool: {fn_name}({fn_args})]")
+
+                    # Execute the tool
+                    if fn_name in TOOL_MAP:
+                        result = TOOL_MAP[fn_name](**fn_args)
+                    else:
+                        result = f"Error: Unknown tool '{fn_name}'"
+
+                    # Add tool result to message history
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": result,
+                    })
+
+                # Continue the loop — the LLM will see the tool results
+                continue
+
+            else:
+                # No tool calls — the LLM is done, print its response
+                print(f"\nAgent: {message.content}")
+                messages.append({"role": "assistant", "content": message.content})
+                break
+
+
+if __name__ == "__main__":
+    run_agent()
+```
+
+### How It Works
+
+1. The user types a request (e.g., "read main.py and add error handling")
+2. The LLM receives the request + tool definitions
+3. The LLM decides to call `read_file("main.py")`
+4. The agent executes the tool and feeds the file contents back to the LLM
+5. The LLM now has the file contents and can reason about changes
+6. The LLM calls `write_file("main.py", "...")` with the updated code
+7. The agent writes the file and confirms
+8. The LLM responds to the user that the task is done
+
+### Try It
+
+```{bash}
+#| label: run-agent
+# Make sure Ollama is running first:
+# ollama serve
+
+python minimal_agent.py
+```
+
+---
+
+# Adding Intelligence: Better Context and Search
+
+The minimal agent works, but it's naive — it has no way to search a codebase. Let's add **grep** and **glob** tools, plus smarter context management.
+
+## Version 2: With Code Search
+
+```{python}
+#| label: search-tools
+"""
+Additional tools to make the agent smarter at navigating code.
+Add these to the TOOLS list and TOOL_MAP from Version 1.
+"""
+
+import glob as glob_module
+
+
+def search_files(pattern: str, path: str = ".") -> str:
+    """Search for files matching a glob pattern."""
+    try:
+        matches = glob_module.glob(pattern, root_dir=path, recursive=True)
+        matches.sort()
+        if not matches:
+            return f"No files matching '{pattern}'"
+        result = matches[:50]  # Limit results
+        output = f"Files matching '{pattern}':\n"
+        output += "\n".join(f"  {m}" for m in result)
+        if len(matches) > 50:
+            output += f"\n  ... and {len(matches) - 50} more"
+        return output
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def grep_code(pattern: str, path: str = ".", file_type: str = "") -> str:
+    """Search file contents using grep."""
+    cmd = f'grep -rn "{pattern}" "{path}"'
+    if file_type:
+        cmd += f' --include="*.{file_type}"'
+    cmd += " | head -30"  # Limit output
+    return run_command(cmd)
+
+
+# Add to TOOLS list:
+SEARCH_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "Find files matching a glob pattern (e.g., '**/*.py' for all Python files).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern"},
+                    "path": {"type": "string", "description": "Root directory (default: '.')"}
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_code",
+            "description": "Search for a text pattern in file contents. Returns matching lines with file paths and line numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Search pattern (regex supported)"},
+                    "path": {"type": "string", "description": "Directory to search in"},
+                    "file_type": {"type": "string", "description": "File extension filter (e.g., 'py', 'js')"}
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
+]
+```
+
+---
+
+# Using Aider: The Fastest Path to a Working Agent
+
+If building from scratch feels like too much, [Aider](https://aider.chat) is a production-ready open-source coding agent that works with local models out of the box.
+
+## Install and Run
+
+```{bash}
+#| label: install-aider
+pip install aider-chat
+```
+
+## Use with a Local Model (via Ollama)
+
+```{bash}
+#| label: aider-ollama
+# Start aider with a local model
+aider --model ollama/qwen2.5-coder:7b
+
+# For a better experience with a bigger model:
+# aider --model ollama/qwen2.5-coder:32b
+```
+
+## Use with DeepSeek API (cheap and powerful)
+
+```{bash}
+#| label: aider-deepseek
+# DeepSeek offers very cheap API access to their coding model
+export DEEPSEEK_API_KEY="your-key-here"
+aider --model deepseek/deepseek-coder
+```
+
+## Key Aider Commands
+
+Once inside Aider:
+
+```
+/add file.py          # Add a file to the chat context
+/drop file.py         # Remove a file from context
+/run pytest           # Run a command
+/diff                 # Show pending changes
+/undo                 # Revert last change
+/help                 # Show all commands
+```
+
+::: {.callout-tip}
+## Aider + Git
+Aider automatically creates git commits for every change it makes. This means you can always `git diff` or `git revert` if something goes wrong. Very safe for experimentation.
+:::
+
+---
+
+# Using SWE-agent: Autonomous Bug Fixing
+
+[SWE-agent](https://swe-agent.com) is designed specifically for resolving GitHub issues autonomously. It's what researchers use to evaluate models on SWE-bench.
+
+## Install
+
+```{bash}
+#| label: install-sweagent
+pip install sweagent
+```
+
+## Run on a GitHub Issue
+
+```{bash}
+#| label: sweagent-run
+# Resolve a GitHub issue using a local model
+sweagent run \
+  --agent.model.name ollama:qwen2.5-coder:7b \
+  --problem_statement.github_url https://github.com/user/repo/issues/42
+```
+
+## Run on a Local Problem
+
+```{bash}
+#| label: sweagent-local
+# Or describe the problem directly
+sweagent run \
+  --agent.model.name ollama:qwen2.5-coder:7b \
+  --problem_statement.text "Fix the off-by-one error in utils/parser.py line 42"
+```
+
+---
+
+# Using OpenCode: The Open-Source Claude Code {#sec-opencode}
+
+[OpenCode](https://opencode.ai) is a terminal-based coding agent that feels very similar to **Claude Code** or **Codex CLI** — but it's fully open-source (MIT licensed) and works with any LLM provider, including local models.
+
+If you've used Claude Code and want something similar that works with open-weight models or your own API keys, OpenCode is the closest match.
+
+## What Makes OpenCode Different?
+
+| Feature | OpenCode | Aider | SWE-agent |
+|---------|----------|-------|-----------|
+| **UX** | Rich terminal UI (like Claude Code) | Simple chat | Autonomous (no interaction) |
+| **Interaction style** | Interactive, iterative | Interactive | Fully autonomous |
+| **File editing** | Inline diffs with approval | Git-based patches | Patch files |
+| **LSP support** | Yes (diagnostics, go-to-definition) | No | No |
+| **Session management** | Built-in (resume previous sessions) | Git history | Logs |
+| **MCP support** | Yes | No | No |
+
+## Install OpenCode
+
+```{bash}
+#| label: install-opencode
+# macOS / Linux — using the install script
+curl -fsSL https://opencode.ai/install | bash
+
+# Or via Go (if you have Go installed)
+go install github.com/opencode-ai/opencode@latest
+```
+
+Verify the installation:
+
+```{bash}
+#| label: verify-opencode
+opencode --version
+```
+
+## Configuration
+
+OpenCode uses a configuration file (`opencode.json`) in your project root. Create one to set up your preferred model:
+
+### With Ollama (local)
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "models": {
+        "qwen-coder": {
+          "model": "qwen2.5-coder:7b",
+          "api_url": "http://localhost:11434/v1"
+        }
+      }
+    }
+  },
+  "model": "qwen-coder"
+}
+```
+
+### With LM Studio (local)
+
+```json
+{
+  "provider": {
+    "lmstudio": {
+      "models": {
+        "coder": {
+          "model": "qwen2.5-coder-7b",
+          "api_url": "http://localhost:1234/v1"
+        }
+      }
+    }
+  },
+  "model": "coder"
+}
+```
+
+### With an API Provider
+
+```json
+{
+  "provider": {
+    "anthropic": {
+      "api_key": "your-key-here"
+    }
+  },
+  "model": "claude-sonnet-4-6-20250514"
+}
+```
+
+::: {.callout-tip}
+## Environment Variables
+Instead of putting API keys in the config file, set them as environment variables. OpenCode automatically reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `DEEPSEEK_API_KEY`.
+:::
+
+## Using OpenCode
+
+### Basic Usage
+
+```{bash}
+#| label: opencode-usage
+# Start OpenCode in your project directory
+cd my-project
+opencode
+```
+
+This opens an interactive terminal UI. You can:
+
+- Type natural language requests ("add input validation to the login function")
+- See file diffs before they're applied
+- Approve or reject changes
+- Ask follow-up questions
+
+### Non-Interactive Mode
+
+```{bash}
+#| label: opencode-noninteractive
+# Run a single task and exit
+opencode -p "refactor the database connection to use connection pooling"
+```
+
+### Key Features in Practice
+
+**File context**: OpenCode automatically indexes your project and pulls in relevant files based on your query — you don't need to manually add files like in Aider.
+
+**Diff review**: When OpenCode proposes a change, you see a side-by-side diff and can accept, reject, or ask for modifications. This is similar to Claude Code's permission model.
+
+**Session persistence**: If you close OpenCode and reopen it, you can resume your previous session with full context.
+
+**LSP integration**: OpenCode can connect to language servers for real-time diagnostics. If your change introduces a type error or syntax issue, it catches it immediately.
+
+## OpenCode vs Claude Code vs Codex CLI
+
+| Feature | OpenCode | Claude Code | Codex CLI |
+|---------|----------|-------------|-----------|
+| Open source | Yes (MIT) | No | Partially |
+| Model choice | Any (local or API) | Claude only | OpenAI only |
+| Cost | Free + model costs | Anthropic pricing | OpenAI pricing |
+| Terminal UI | Rich TUI | Rich TUI | Rich TUI |
+| Tool use | Yes | Yes | Yes |
+| On-premise | Yes | No | No |
+| MCP support | Yes | Yes | No |
+
+::: {.callout-note}
+## When to Choose OpenCode
+OpenCode is ideal if you want a **Claude Code-like experience** but need to (a) use open-weight models for privacy/compliance, (b) avoid vendor lock-in, or (c) customize the agent's behaviour. It's particularly well-suited for teams in regulated industries who can't send code to external APIs.
+:::
+
+---
+
+# Brief Guide to API-Based Models {#sec-api-models}
+
+Sometimes local models aren't enough — you need the full power of frontier models. Here's a quick overview.
+
+## When to Use API Models
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Simple code generation, autocomplete | Local model (7B-32B) |
+| Complex refactoring, multi-file changes | API model or large local (70B+) |
+| Regulated environment, no external access | Local model only |
+| Prototyping, exploring ideas | API model (faster iteration) |
+
+## Provider Comparison
+
+| Provider | Model | Pricing (approx.) | Strengths |
+|----------|-------|-------------------|-----------|
+| Anthropic | Claude Sonnet 4.6 | $3 / $15 per 1M tokens | Best for careful, thorough coding |
+| OpenAI | GPT-4.1 | $2 / $8 per 1M tokens | Good all-rounder |
+| DeepSeek | DeepSeek-R1 | $0.55 / $2.19 per 1M tokens | Excellent value, strong reasoning |
+| Google | Gemini 2.5 Pro | $1.25-2.50 / $10-15 per 1M tokens | Huge context window (1M tokens) |
+
+*Prices: input / output per million tokens. Check provider websites for current pricing.*
+
+## Example: Using Claude API with Our Agent
+
+To switch our minimal agent from a local model to Claude, just change the client configuration:
+
+```{python}
+#| label: claude-api-example
+"""
+Swap the OpenAI client for Anthropic's API.
+Everything else (tools, agent loop) stays the same!
+"""
+
+# pip install anthropic
+
+from anthropic import Anthropic
+
+client = Anthropic()  # Uses ANTHROPIC_API_KEY env variable
+
+# The Anthropic SDK uses a slightly different format for tool calling,
+# but the concept is identical. Here's the key difference:
+
+response = client.messages.create(
+    model="claude-sonnet-4-6-20250514",
+    max_tokens=4096,
+    system="You are a helpful coding assistant.",
+    messages=[
+        {"role": "user", "content": "Read main.py and explain what it does"}
+    ],
+    tools=[
+        {
+            "name": "read_file",
+            "description": "Read a file's contents",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path"}
+                },
+                "required": ["path"]
+            }
+        }
+    ]
+)
+
+# Handle tool use in the response
+for block in response.content:
+    if block.type == "tool_use":
+        print(f"Model wants to call: {block.name}({block.input})")
+    elif block.type == "text":
+        print(block.text)
+```
+
+## Example: Using OpenAI-Compatible APIs
+
+Many providers (DeepSeek, Together, Groq, Fireworks) offer OpenAI-compatible endpoints. Our minimal agent works with all of them — just change the base URL:
+
+```{python}
+#| label: openai-compatible
+from openai import OpenAI
+
+# DeepSeek
+client = OpenAI(
+    base_url="https://api.deepseek.com",
+    api_key="your-deepseek-key",
+)
+
+# Together AI (hosts many open models)
+client = OpenAI(
+    base_url="https://api.together.xyz/v1",
+    api_key="your-together-key",
+)
+
+# Groq (extremely fast inference)
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key="your-groq-key",
+)
+
+# The rest of the agent code is identical!
+```
+
+---
+
+# Security Considerations
+
+When building a coding agent — especially one that can execute shell commands — security matters.
+
+## Key Principles
+
+1. **Sandboxing**: Never run an agent with root privileges. Use Docker containers or restricted user accounts.
+
+2. **Path restrictions**: Limit file access to the project directory:
+
+```{python}
+#| label: path-safety
+import os
+
+ALLOWED_ROOT = os.path.abspath("./my-project")
+
+def safe_read_file(path: str) -> str:
+    """Read a file, but only within the allowed directory."""
+    abs_path = os.path.abspath(path)
+    if not abs_path.startswith(ALLOWED_ROOT):
+        return f"Error: Access denied. Path must be within {ALLOWED_ROOT}"
+    # ... proceed with reading
+```
+
+3. **Command allowlisting**: Don't let the agent run arbitrary commands in production:
+
+```{python}
+#| label: command-safety
+ALLOWED_COMMANDS = ["python", "pytest", "git", "ls", "cat", "grep"]
+
+def safe_run_command(command: str) -> str:
+    """Only allow pre-approved commands."""
+    first_word = command.split()[0]
+    if first_word not in ALLOWED_COMMANDS:
+        return f"Error: Command '{first_word}' is not allowed."
+    # ... proceed with execution
+```
+
+4. **Token/cost limits**: Set maximum tokens per request and total spend limits when using APIs.
+
+5. **Human-in-the-loop**: For destructive actions (file deletion, git push), always ask for confirmation.
+
+---
+
+# Next Steps
+
+You now know how to:
+
+- Evaluate and choose open-weight coding models
+- Set up local inference with Ollama
+- Build a coding agent from scratch
+- Use production-ready tools like Aider and SWE-agent
+- Switch between local and API-based models
+
+## Where to Go From Here
+
+- **Fine-tune a model** on your organization's codebase for better domain-specific results
+- **Add RAG** (Retrieval-Augmented Generation) to give the agent access to documentation
+- **Integrate with your IDE** using the Language Server Protocol (LSP)
+- **Deploy internally** using tools like [vLLM](https://docs.vllm.ai/) or [TGI](https://huggingface.co/docs/text-generation-inference/) for team-wide access
+- **Evaluate rigorously** using SWE-bench to track model improvements over time
+
+::: {.callout-note}
+## Further Reading
+
+- [Aider Leaderboard](https://aider.chat/docs/leaderboards/) — Which models work best with Aider
+- [SWE-bench Results](https://www.swebench.com) — Agent benchmark results
+- [Open LLM Leaderboard](https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard) — General model comparisons
+- [Ollama Model Library](https://ollama.com/library) — Available local models
+- [Hugging Face Code Models](https://huggingface.co/models?pipeline_tag=text-generation&sort=trending&search=code) — Browse coding models
+:::
+
+---
+
+*This guide was created as part of a PhD research project at the University of Oslo. Last updated: March 2026.*
