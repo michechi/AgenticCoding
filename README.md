@@ -1,10 +1,10 @@
 # Build Your Own Coding Agent
 
-A practical, hands-on guide to open-source AI coding assistants — from choosing the right model to building a working agent from scratch.
+A practical, hands-on guide to open-source AI coding assistants: from choosing the right model to building a working agent from scratch.
 
 ## Who Is This For?
 
-Tech-savvy professionals who want to understand and use AI coding agents without relying on closed-source tools. No ML background required — if you know what `pip install` and `git` do, you're good.
+Tech-savvy professionals who want to understand and use AI coding agents without relying on closed-source tools. No ML background required; if you know what `pip install` and `git` do, you're good.
 
 ## What's Covered
 
